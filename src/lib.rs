@@ -221,6 +221,7 @@ fn process_csv_file_impl(
 
     process_csv_impl(&csv_data, selected_columns, row_filter_definitions)
 }
+
 fn apply_filters(record: &[&str], filters: &[&str], header_indices: &HashMap<&str, usize>) -> bool {
     let mut grouped_filters: HashMap<&str, Vec<&str>> = HashMap::new();
     for &filter in filters {
@@ -274,12 +275,305 @@ fn apply_filters(record: &[&str], filters: &[&str], header_indices: &HashMap<&st
 }
 
 #[cfg(test)]
-mod tests {
+mod libcsv_tests {
     use super::*;
+    use std::{collections::HashMap, ffi::CString};
 
     #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+    fn test_exit_if_no_header() {
+        let col = "nonexistent";
+        let result = std::panic::catch_unwind(|| exit_if_no_header(col));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_split_filter() {
+        assert_eq!(split_filter("age>25"), Some(vec!["age", "25"]));
+        assert_eq!(split_filter("age<25"), Some(vec!["age", "25"]));
+        assert_eq!(split_filter("age>=25"), Some(vec!["age", "25"]));
+        assert_eq!(split_filter("age=25"), Some(vec!["age", "25"]));
+        assert_eq!(split_filter("age<=25"), Some(vec!["age", "25"]));
+        assert_eq!(split_filter("age!=25"), Some(vec!["age", "25"]));
+        assert!(split_filter("").is_none());
+        assert!(split_filter("age=25=40").is_none());
+        assert!(split_filter("invalidfilter").is_none());
+    }
+
+    #[test]
+    fn test_remove_invalid_filters() {
+        let filters = "age>25\ninvalidfilter\nage<30";
+        let valid_filters = remove_invalid_filters(filters);
+        assert_eq!(valid_filters, vec!["age>25", "age<30"]);
+    }
+
+    const CSV_DATA: &str = "header1,header2,header3\n1,2,3\n4,5,6\n7,8,9";
+
+    fn setup_test_csv() -> HashMap<&'static str, (&'static str, &'static str, &'static str)> {
+        let mut cases = HashMap::new();
+
+        cases.insert(
+            "all_columns_no_filters",
+            (
+                "header1,header2,header3",
+                "",
+                "header1,header2,header3\n1,2,3\n4,5,6\n7,8,9",
+            ),
+        );
+
+        cases.insert(
+            "two_columns_no_filter",
+            ("header2,header3", "", "header2,header3\n2,3\n5,6\n8,9"),
+        );
+
+        cases.insert(
+            "all_columns_no_filters_unordered",
+            (
+                "header3,header1,header2",
+                "",
+                "header1,header2,header3\n1,2,3\n4,5,6\n7,8,9",
+            ),
+        );
+
+        cases.insert(
+            "two_columns_equal_filter",
+            ("header3,header1", "header2=2", "header1,header3\n1,3"),
+        );
+
+        cases.insert(
+            "two_columns_less_filter",
+            ("header2,header1", "header1<2", "header1,header2\n1,2"),
+        );
+
+        cases.insert(
+            "two_columns_greater_filter",
+            (
+                "header1,header2,header3",
+                "header3>7",
+                "header1,header2,header3\n7,8,9",
+            ),
+        );
+
+        cases.insert(
+            "two_columns_different_filter",
+            ("header3,header1", "header1!=1", "header1,header3\n4,6\n7,9"),
+        );
+
+        cases.insert(
+            "two_columns_geater_or_equal_filter",
+            ("header2,header1", "header2>=5", "header1,header2\n4,5\n7,8"),
+        );
+
+        cases.insert(
+            "two_columns_less_or_equal_filter",
+            ("header3,header2", "header1<=6", "header2,header3\n2,3\n5,6"),
+        );
+
+        cases.insert(
+            "all_columns_all_simple_filters",
+            (
+                "header2,header3,header1",
+                "header1>6\nheader2<9\nheader3=9",
+                "header1,header2,header3\n7,8,9",
+            ),
+        );
+
+        cases.insert(
+            "all_columns_all_composite_filters",
+            (
+                "header3,header1,header2",
+                "header1!=2\nheader2>=5\nheader3<=6",
+                "header1,header2,header3\n4,5,6",
+            ),
+        );
+
+        cases.insert(
+            "all_columns_mixed_filters",
+            (
+                "header3,header1,header2",
+                "header1!=2\nheader2=5\nheader3<=7",
+                "header1,header2,header3\n4,5,6",
+            ),
+        );
+
+        cases.insert(
+            "all_columns_or_equal_filters",
+            (
+                "header3,header1,header2",
+                "header1=10\nheader1=7",
+                "header1,header2,header3\n7,8,9",
+            ),
+        );
+
+        cases.insert(
+            "all_columns_or_less_filters",
+            (
+                "header3,header1,header2",
+                "header3<2\nheader3<7",
+                "header1,header2,header3\n1,2,3\n4,5,6",
+            ),
+        );
+
+        cases.insert(
+            "all_columns_or_grater_filter",
+            (
+                "header3,header1,header2",
+                "header2>9\nheader2>7",
+                "header1,header2,header3\n7,8,9",
+            ),
+        );
+
+        cases.insert(
+            "all_columns_or_mixed_simple_filter",
+            (
+                "header3,header1,header2",
+                "header1=1\nheader1=4\nheader2>3\nheader3>4",
+                "header1,header2,header3\n4,5,6",
+            ),
+        );
+
+        cases.insert(
+            "all_columns_or_mixed_composite_filter",
+            (
+                "header3,header1,header2",
+                "header1!=1\nheader1=8\nheader2>=3\nheader3=4\nheader3<=9",
+                "header1,header2,header3\n4,5,6\n7,8,9",
+            ),
+        );
+
+        cases.insert(
+            "two_columns_invalid_filter",
+            (
+                "header3,header2",
+                "header1=7\nheader2-8",
+                "header2,header3\n8,9",
+            ),
+        );
+
+        cases
+    }
+
+    #[test]
+    fn test_process_csv_impl_multiple_cases() {
+        let cases = setup_test_csv();
+
+        for (case_name, (selected_columns, row_filter_definitions, expected_result)) in cases {
+            let result = process_csv_impl(CSV_DATA, selected_columns, row_filter_definitions);
+            assert_eq!(
+                &result, expected_result,
+                "\n\nTest case '{}' failed: \nExpected '{}'; \nGot '{}'\n",
+                case_name, expected_result, result
+            );
+        }
+    }
+
+    #[test]
+    fn test_process_csv_impl_multiple_with_double_quote_as_header_char() {
+        let csv_data: &str = "header1,header2,heade\"r3\n1,2,3\n4,5,6\n7,8,9";
+        let selected_columns = "heade\"r3,header1,header2";
+        let row_filter_definitions = "header1!=1\nheader1=8\nheader2>=3\nheade\"r3=4\nheade\"r3<=9";
+        let expected_result = "header1,header2,heade\"r3\n4,5,6\n7,8,9";
+
+        let result = process_csv_impl(csv_data, selected_columns, row_filter_definitions);
+        assert_eq!(&result, expected_result,);
+    }
+
+    #[test]
+    fn test_process_csv_impl_missing_selected_header() {
+        let selected_columns = "header1,nonexistent";
+        let filters = "";
+        let result =
+            std::panic::catch_unwind(|| process_csv_impl(CSV_DATA, selected_columns, filters));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_process_csv_impl_missing_selected_in_filters() {
+        let selected_columns = "header1,header2,header3";
+        let filters = "header1=7\nnonexistent=8";
+        let result =
+            std::panic::catch_unwind(|| process_csv_impl(CSV_DATA, selected_columns, filters));
+        assert!(result.is_err());
+    }
+
+    const FILE_PATH: &str = "/tmp/test.csv";
+
+    #[test]
+    fn test_process_csv_file_impl_multiple_with_double_quote_as_header_char() {
+        let csv_data: &str = "header1,header2,heade\"r3\n1,2,3\n4,5,6\n7,8,9";
+        std::fs::write(FILE_PATH, csv_data).unwrap();
+
+        let selected_columns = "heade\"r3,header1,header2";
+        let row_filter_definitions = "header1!=1\nheader1=8\nheader2>=3\nheade\"r3=4\nheade\"r3<=9";
+        let expected_result = "header1,header2,heade\"r3\n4,5,6\n7,8,9";
+
+        let result = process_csv_file_impl(FILE_PATH, selected_columns, row_filter_definitions);
+        assert_eq!(&result, expected_result,);
+    }
+
+    #[test]
+    fn test_process_csv_file_impl_multiple_cases() {
+        let cases = setup_test_csv();
+
+        for (case_name, (selected_columns, row_filter_definitions, expected_result)) in cases {
+            std::fs::write(FILE_PATH, CSV_DATA).unwrap();
+            let result = process_csv_file_impl(FILE_PATH, selected_columns, row_filter_definitions);
+            assert_eq!(
+                &result, expected_result,
+                "\n\nTest case '{}' failed: \nExpected '{}'; \nGot '{}'\n",
+                case_name, expected_result, result
+            );
+        }
+    }
+
+    #[test]
+    fn test_process_csv_file_impl_missing_selected_header() {
+        let selected_columns = "header1,nonexistent";
+        let filters = "";
+        std::fs::write(FILE_PATH, CSV_DATA).unwrap();
+        let result = std::panic::catch_unwind(|| {
+            process_csv_file_impl(FILE_PATH, selected_columns, filters)
+        });
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_process_csv_file_impl_missing_selected_in_filters() {
+        let selected_columns = "header1,header2,header3";
+        let filters = "header1=7\nnonexistent=8";
+        std::fs::write(FILE_PATH, CSV_DATA).unwrap();
+        let result = std::panic::catch_unwind(|| {
+            process_csv_file_impl(FILE_PATH, selected_columns, filters)
+        });
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_inputs_on_process_csv_c_function() {
+        let csv_data = CString::new(CSV_DATA).unwrap();
+        let selected_columns = CString::new("header1,header2,header3").unwrap();
+        let row_filter_definitions =
+            CString::new("header1!=1\nheader1=8\nheader2>=3\nheader3=4\nheader3<=9").unwrap();
+
+        processCsv(
+            csv_data.as_ptr(),
+            selected_columns.as_ptr(),
+            row_filter_definitions.as_ptr(),
+        );
+    }
+
+    #[test]
+    fn test_inputs_on_process_csv_file_c_function() {
+        std::fs::write(FILE_PATH, CSV_DATA).unwrap();
+
+        let csv_file_path = CString::new(FILE_PATH).unwrap();
+        let selected_columns = CString::new("header1,header2,header3").unwrap();
+        let row_filter_definitions =
+            CString::new("header1!=1\nheader1=8\nheader2>=3\nheader3=4\nheader3<=9").unwrap();
+
+        processCsvFile(
+            csv_file_path.as_ptr(),
+            selected_columns.as_ptr(),
+            row_filter_definitions.as_ptr(),
+        );
     }
 }
