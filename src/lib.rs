@@ -48,6 +48,32 @@ fn exit_if_no_header(col: &str) {
     panic!("Execution ended.");
 }
 
+fn split_filter(filter: &str) -> Option<Vec<&str>> {
+    let filter_parts: Vec<&str> = if filter.contains("<=") {
+        filter.split("<=").collect()
+    } else if filter.contains(">=") {
+        filter.split(">=").collect()
+    } else if filter.contains("!=") {
+        filter.split("!=").collect()
+    } else if filter.contains('=') {
+        filter.split('=').collect()
+    } else if filter.contains('<') {
+        filter.split('<').collect()
+    } else if filter.contains('>') {
+        filter.split('>').collect()
+    } else if filter.is_empty() {
+        return None;
+    } else {
+        eprintln!("Invalid filter: {}", filter);
+        return None;
+    };
+    if filter_parts.len() != 2 {
+        eprintln!("Invalid filter: {}", filter);
+        return None;
+    }
+    Some(filter_parts)
+}
+
 fn remove_invalid_filters(filters: &str) -> Vec<&str> {
     filters
         .split('\n')
