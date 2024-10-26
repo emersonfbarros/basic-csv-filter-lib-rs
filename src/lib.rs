@@ -43,6 +43,43 @@ pub extern "C" fn processCsv(
     }
 }
 
+#[no_mangle]
+pub extern "C" fn processCsvFile(
+    csv_file_path: *const c_char,
+    selected_columns: *const c_char,
+    row_filter_definitions: *const c_char,
+) {
+    unsafe {
+        let csv_file_path = match CStr::from_ptr(csv_file_path).to_str() {
+            Ok(path) => path,
+            Err(e) => {
+                eprintln!("Failed to convert csv_file_path: {}", e);
+                process::exit(1)
+            }
+        };
+
+        let selected_columns = match CStr::from_ptr(selected_columns).to_str() {
+            Ok(columns) => columns,
+            Err(e) => {
+                eprintln!("Failed to convert selected_columns: {}", e);
+                process::exit(1)
+            }
+        };
+
+        let row_filter_definitions = match CStr::from_ptr(row_filter_definitions).to_str() {
+            Ok(filter) => filter,
+            Err(e) => {
+                eprintln!("Failed to convert row_filter_definitions: {}", e);
+                process::exit(1)
+            }
+        };
+
+        let final_result =
+            process_csv_file_impl(csv_file_path, selected_columns, row_filter_definitions);
+        print_result(final_result);
+    }
+}
+
 fn exit_if_no_header(col: &str) {
     eprintln!("Header '{}' not found in CSV file/string", col);
     panic!("Execution ended.");
@@ -155,6 +192,34 @@ fn process_csv_impl(
     }
 
     result_rows
+}
+
+fn process_csv_file_impl(
+    csv_path: &str,
+    selected_columns: &str,
+    row_filter_definitions: &str,
+) -> String {
+    let file = match File::open(csv_path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Failed to open file {}: {}", csv_path, e);
+            process::exit(1);
+        }
+    };
+
+    let reader = BufReader::new(file);
+    let mut csv_data = String::new();
+    for line in reader.lines() {
+        match line {
+            Ok(l) => csv_data.push_str(&format!("{}\n", l)),
+            Err(e) => {
+                eprintln!("Failed to read file {}: {}", csv_path, e);
+                process::exit(1);
+            }
+        }
+    }
+
+    process_csv_impl(&csv_data, selected_columns, row_filter_definitions)
 }
 fn apply_filters(record: &[&str], filters: &[&str], header_indices: &HashMap<&str, usize>) -> bool {
     let mut grouped_filters: HashMap<&str, Vec<&str>> = HashMap::new();
