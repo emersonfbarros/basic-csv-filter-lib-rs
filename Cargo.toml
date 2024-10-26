@@ -1,0 +1,9 @@
+[package]
+name = "libcsv-rs"
+version = "0.1.0"
+author = ["Emerson Barros <emersonfb99@gmail.com>"]
+edition = "2021"
+
+[lib]
+name = "csv"
+crate-type = ["cdylib"]
